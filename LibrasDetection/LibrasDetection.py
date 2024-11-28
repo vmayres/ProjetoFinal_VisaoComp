@@ -1,72 +1,66 @@
 #Bibliotecas
+import sys
 import os
 import cv2
 import numpy as np
+from tensorflow.keras.models import load_model
 
-import tensorflow as tf
-from sklearn.model_selection import train_test_split
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Conv3D, MaxPooling3D, Flatten, Dense, Dropout
-from tensorflow.keras.utils import to_categorical
-from tensorflow.keras.preprocessing.image import img_to_array
-
-# Caminho do diretório onde o dataset foi salvo
-saved_dataset_path = r"LibrasDetection\processed_dataset"
+# Set default encoding to UTF-8
+os.environ["PYTHONIOENCODING"] = "utf-8"
+sys.stdout.reconfigure(encoding='utf-8')
+sys.stderr.reconfigure(encoding='utf-8')
 
 
-# Carrega o dataset
-loaded_dataset = tf.data.Dataset.load(saved_dataset_path)
+# Carregar o modelo
+model_path = r"D:\ProjetoFinal_VisaoComp\model_teste20classes.keras"
+model = load_model(model_path)
 
-# Itera sobre o dataset e imprime os dados
-for data, label in loaded_dataset.take(5):  # Ajuste o número de exemplos a ser exibido
-    print("Dados (frames do video):", data.shape)
-    print("Label:", label.numpy())
+# Inicializar a captura de vídeo
+cap = cv2.VideoCapture(0)
 
-# num_classes = 0
+# Função para processar os frames e fazer a predição
+def process_frames(frames, model):
+    # Redimensionar os frames para o tamanho esperado pelo modelo
+    resized_frames = [cv2.resize(frame, (64, 64)) for frame in frames]
+    # Normalizar os valores dos pixels
+    input_frames = np.array(resized_frames) / 255.0
+    # Ajustar a forma da entrada para (número de frames, 64, 64, 3)
+    input_frames = input_frames.reshape((len(frames), 64, 64, 3))
+    # Expandir a dimensão para corresponder à entrada do modelo
+    input_frames = np.expand_dims(input_frames, axis=0)
+    
+    # Fazer a predição
+    prediction = model.predict(input_frames)
+    
+    # Obter a classe prevista
+    predicted_class = np.argmax(prediction, axis=-1)
+    
+    # Imprimir a predição no terminal
+    print(f"Predicted: {predicted_class[0]}")
+    
+    return prediction
 
-# data = []
-# labels = []
+if not cap.isOpened():
+    print("Erro ao abrir a câmera")
+frames = []
 
-# # Dividir os dados em conjuntos de treino e validação
-# X_train, X_test, y_train, y_test = train_test_split(data, labels, test_size=0.2)
+# Capturar frames da câmera e processar
+frames = []
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        break
+    frames.append(frame)
+    
+    if len(frames) == 30:  # Processar 30 frames de cada vez
+        prediction = process_frames(frames, model)
+        frames = []  # Limpar a lista de frames para capturar os próximos
 
-# # Codificar as labels para one-hot
-# X_train_hot = to_categorical(X_train, num_classes=num_classes)
-# y_train_hot = to_categorical(y_train, num_classes=num_classes)
+    # Mostrar o frame capturado
+    cv2.imshow('Frame', frame)
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
 
-# # Construção do modelo Conv3D
-# model = Sequential([
-#     Input(shape=(num_frames, altura, largura, canais)),
-#     Conv3D(64, kernel_size=(3, 3, 3), activation='relu'),
-#     MaxPooling3D(pool_size=(2, 2, 2)),
-#     Conv3D(64, kernel_size=(3, 3, 3), activation='relu'),
-#     MaxPooling3D(pool_size=(2, 2, 2)),
-#     Conv3D(64, kernel_size=(3, 3, 3), activation='relu'),
-#     MaxPooling3D(pool_size=(2, 2, 2)),
-#     Flatten(),
-#     Dense(64, activation='relu'),
-#     Dropout(0.5),
-#     Dense(num_classes, activation='softmax')
-# ])
-
-# # Compilação do modelo
-# model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
-
-# # Exibir o resumo do modelo
-# model.summary()
-
-# # Treinamento do modelo
-# model.fit(X_train_hot, y_train_hot, batch_size=32, epochs=10, validation_split=0.2)
-
-# predictions = model.predict(X_test)
-# print(predictions)
-
-# # Avaliação do modelo
-# score = model.evaluate(X_test, y_test, batch_size=32)
-
-# print("Test loss:", score[0])
-
-# print("Test accuracy:", score[1])
-
-# predictions = model.predict(X_test)
-
+# Liberar a captura de vídeo e fechar as janelas
+cap.release()
+cv2.destroyAllWindows()
