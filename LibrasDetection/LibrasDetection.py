@@ -1,66 +1,85 @@
-#Bibliotecas
-import sys
-import os
-import cv2
+import cv2 as cv
+import mediapipe as mp
 import numpy as np
 from tensorflow.keras.models import load_model
+from collections import deque
 
-# Set default encoding to UTF-8
-os.environ["PYTHONIOENCODING"] = "utf-8"
-sys.stdout.reconfigure(encoding='utf-8')
-sys.stderr.reconfigure(encoding='utf-8')
-
+# Configuração do MediaPipe Pose
+mp_pose = mp.solutions.pose
+mp_drawing = mp.solutions.drawing_utils
 
 # Carregar o modelo
 model_path = r"D:\ProjetoFinal_VisaoComp\model_teste20classes.keras"
 model = load_model(model_path)
 
-# Inicializar a captura de vídeo
-cap = cv2.VideoCapture(0)
+# Parâmetros
+target_size = (64, 64)  # Dimensão dos frames
+num_frames = 60  # Número de frames consecutivos
+class_labels = ['Classe1', 'Classe2', 'Classe3', '...']  # Substitua pelos nomes das classes
 
-# Função para processar os frames e fazer a predição
-def process_frames(frames, model):
-    # Redimensionar os frames para o tamanho esperado pelo modelo
-    resized_frames = [cv2.resize(frame, (64, 64)) for frame in frames]
-    # Normalizar os valores dos pixels
-    input_frames = np.array(resized_frames) / 255.0
-    # Ajustar a forma da entrada para (número de frames, 64, 64, 3)
-    input_frames = input_frames.reshape((len(frames), 64, 64, 3))
-    # Expandir a dimensão para corresponder à entrada do modelo
-    input_frames = np.expand_dims(input_frames, axis=0)
-    
-    # Fazer a predição
-    prediction = model.predict(input_frames)
-    
-    # Obter a classe prevista
-    predicted_class = np.argmax(prediction, axis=-1)
-    
-    # Imprimir a predição no terminal
-    print(f"Predicted: {predicted_class[0]}")
-    
-    return prediction
+def process_realtime_video():
+    cap = cv.VideoCapture(0)  # Inicializa a captura da câmera
+    frame_buffer = deque(maxlen=num_frames)  # Buffer para frames
 
-if not cap.isOpened():
-    print("Erro ao abrir a câmera")
-frames = []
+    with mp_pose.Pose(static_image_mode=False, min_detection_confidence=0.5, min_tracking_confidence=0.5) as pose:
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-# Capturar frames da câmera e processar
-frames = []
-while True:
-    ret, frame = cap.read()
-    if not ret:
-        break
-    frames.append(frame)
-    
-    if len(frames) == 30:  # Processar 30 frames de cada vez
-        prediction = process_frames(frames, model)
-        frames = []  # Limpar a lista de frames para capturar os próximos
+            # Converter o frame para RGB
+            rgb_frame = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
+            result = pose.process(rgb_frame)
 
-    # Mostrar o frame capturado
-    cv2.imshow('Frame', frame)
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
+            # Criar uma máscara preta
+            mask = np.zeros(frame.shape[:2], dtype=np.uint8)
 
-# Liberar a captura de vídeo e fechar as janelas
-cap.release()
-cv2.destroyAllWindows()
+            # Desenhar landmarks na máscara
+            if result.pose_landmarks:
+                color_mask = cv.cvtColor(mask, cv.COLOR_GRAY2BGR)
+                mp_drawing.draw_landmarks(
+                    color_mask,
+                    result.pose_landmarks,
+                    mp_pose.POSE_CONNECTIONS,
+                    mp_drawing.DrawingSpec(color=(255, 255, 255), thickness=2),  # Branco para conexões
+                    mp_drawing.DrawingSpec(color=(255, 255, 255), thickness=2)   # Branco para pontos
+                )
+                mask = cv.cvtColor(color_mask, cv.COLOR_BGR2GRAY)
+
+            # Converter a máscara para 3 canais e redimensionar
+            final_mask = cv.cvtColor(mask, cv.COLOR_GRAY2BGR)
+            resized_mask = cv.resize(final_mask, target_size)
+
+            # Normalizar e adicionar ao buffer
+            frame_buffer.append(resized_mask / 255.0)  # Normalizado para [0, 1]
+
+            # Fazer predição quando o buffer estiver cheio
+            if len(frame_buffer) == num_frames:
+                input_data = np.expand_dims(np.array(frame_buffer, dtype=np.float32), axis=0)
+                prediction = model.predict(input_data)
+                predicted_class = class_labels[np.argmax(prediction)]
+                confidence = np.max(prediction)
+
+                # Mostrar previsão no vídeo
+                cv.putText(
+                    frame,
+                    f"{predicted_class} ({confidence:.2f})",
+                    (10, 50),
+                    cv.FONT_HERSHEY_SIMPLEX,
+                    1.2,
+                    (255, 0, 0),  # Azul
+                    3
+                )
+
+            # Exibir vídeo com a previsão
+            cv.imshow('Reconhecimento em Tempo Real', frame)
+
+            # Pressione 'q' para sair
+            if cv.waitKey(1) & 0xFF == ord('q'):
+                break
+
+    cap.release()
+    cv.destroyAllWindows()
+
+# Executar o reconhecimento em tempo real
+process_realtime_video()
