@@ -1,68 +1,63 @@
-import os
-import io
-import sys
-import numpy as np
 import cv2 as cv
 import mediapipe as mp
 import numpy as np
-from tensorflow.keras.models import load_model # type: ignore
-from collections import deque
+from tensorflow.keras.models import load_model
 import time
+import sys
+import os
+import io
 
-# Set default encoding to UTF-8
+# Configurar o ambiente para UTF-8
 os.environ["PYTHONIOENCODING"] = "utf-8"
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
 
 # Inicializar o MediaPipe Hands e Pose
 mp_hands = mp.solutions.hands
 mp_pose = mp.solutions.pose
 mp_drawing = mp.solutions.drawing_utils
 
-# Carregar o modelo
+# Carregar o modelo treinado
 model_path = r"D:\ProjetoFinal_VisaoComp\model_mask10classes.keras"
 model = load_model(model_path)
 
 # Parâmetros
-target_size = (64, 64)  # Dimensão dos frames
-num_frames = 60  # Número de frames consecutivos
+altura, largura, canais = 64, 64, 1  # Dimensões e canais
+num_frames = 30  # Número de frames esperados
+target_size = (largura, altura)
+frame_rate = 30  # FPS da câmera
+capture_duration = 5  # Duração em segundos
+
 class_labels = ['Acontecer', 'Amarelo', 'America', 'Aproveitar', 'Banheiro', 
                 'Barulho', 'Cinco', 'Espelho', 'Esquina', 'Medo']
 
-# Inicializar a fila para armazenar as últimas previsões
-recent_predictions = deque(maxlen=10)  # Janela deslizante
+# Função para processar frames capturados
+def process_video_frames(frames, target_size, num_frames, model):
+    # Redimensionar frames para o tamanho do modelo
+    resized_frames = [cv.resize(frame, target_size) / 255.0 for frame in frames]
 
-# Função para processar os frames e fazer a predição
-def process_frames(frames, model):
-    # Redimensionar os frames para o tamanho esperado pelo modelo
-    resized_frames = [cv.resize(frame, target_size) for frame in frames]
-    # Normalizar os valores dos pixels
-    input_frames = np.array(resized_frames) / 255.0
-    # Ajustar a forma da entrada para (número de frames, altura, largura, canais)
-    input_frames = input_frames.reshape((num_frames, *target_size, 3))
-    # Expandir a dimensão para corresponder à entrada do modelo
-    input_frames = np.expand_dims(input_frames, axis=0)
-    
-    # Fazer a predição
+    # Ajustar o número de frames para o número esperado
+    if len(resized_frames) > num_frames:
+        indices = np.linspace(0, len(resized_frames) - 1, num_frames).astype(int)
+        resized_frames = [resized_frames[i] for i in indices]
+    elif len(resized_frames) < num_frames:
+        padding = num_frames - len(resized_frames)
+        resized_frames.extend([resized_frames[-1]] * padding)
+
+    # Converter para formato de entrada do modelo
+    input_frames = np.array(resized_frames).reshape((1, num_frames, *target_size, canais))
+
+    # Fazer a previsão
     prediction = model.predict(input_frames)
     return prediction
 
-def process_realtime_video():
-    # Inicializar a captura de vídeo
+# Função principal para capturar e processar vídeo em tempo real
+def realtime_prediction():
     cap = cv.VideoCapture(0)
-    cap.set(cv.CAP_PROP_FRAME_WIDTH, 1536)
-    cap.set(cv.CAP_PROP_FRAME_HEIGHT, 864)
-    
-    frames = []
-    frame_count = 0
-    predicted_class_label = ""
-    prediction_percentages = []
+    cap.set(cv.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv.CAP_PROP_FRAME_HEIGHT, 480)
 
-    # Taxa de coleta de frames
-    frame_interval = 0.2  # Coletar a cada 200ms
-    last_frame_time = time.time()
-
-    # Inicializar o MediaPipe Pose e Hands
     with mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5) as pose, \
          mp_hands.Hands(min_detection_confidence=0.5, min_tracking_confidence=0.5) as hands:
         while True:
@@ -70,59 +65,66 @@ def process_realtime_video():
             if not ret:
                 break
 
-            # Converter a imagem para RGB
-            image_rgb = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
-            # Processar a imagem com o MediaPipe Pose
-            pose_results = pose.process(image_rgb)
-            # Processar a imagem com o MediaPipe Hands
-            hand_results = hands.process(image_rgb)
+            # Exibir instruções na tela
+            cv.putText(frame, "Pressione ESPACO para gravar 5 segundos", (10, 30), cv.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv.LINE_AA)
+            cv.imshow("Real-Time Video", frame)
 
-            # Criar uma imagem preta para a máscara
-            mask_frame = np.zeros((frame.shape[0], frame.shape[1], 3), dtype=np.uint8)
-            # Desenhar as marcas do MediaPipe Pose na máscara
-            if pose_results.pose_landmarks:
-                mp_drawing.draw_landmarks(mask_frame, pose_results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
-            # Desenhar as marcas do MediaPipe Hands na máscara
-            if hand_results.multi_hand_landmarks:
-                for hand_landmarks in hand_results.multi_hand_landmarks:
-                    mp_drawing.draw_landmarks(mask_frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+            # Verificar se a barra de espaço foi pressionada
+            if cv.waitKey(1) & 0xFF == ord(' '):
+                frames = []
+                start_time = time.time()
 
-            # Coletar os frames em intervalos consistentes
-            if time.time() - last_frame_time >= frame_interval:
-                resized_mask = cv.resize(mask_frame, target_size) / 255.0  # Redimensionar e normalizar
-                frames.append(resized_mask)
-                last_frame_time = time.time()
-            
-            if len(frames) == num_frames:  # Processar quando atingir 60 frames
-                prediction = process_frames(frames, model)
-                predicted_class = np.argmax(prediction, axis=-1)[0]
-                predicted_class_label = class_labels[predicted_class]
-                prediction_percentages = prediction[0] * 100  # Obter as porcentagens
-                recent_predictions.append(predicted_class)  # Adicionar a classe à fila
-                frames = []  # Limpar os frames
+                # Capturar frames durante os próximos 5 segundos
+                while time.time() - start_time < capture_duration:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
 
-            # Calcular a classe mais frequente na janela deslizante
-            if recent_predictions:
-                final_class = max(set(recent_predictions), key=recent_predictions.count)
-                final_class_label = class_labels[final_class]
-            else:
-                final_class_label = "Calculando..."
+                    # Converter para RGB e aplicar MediaPipe
+                    image_rgb = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
+                    pose_results = pose.process(image_rgb)
+                    hand_results = hands.process(image_rgb)
 
-            # Mostrar a predição no frame
-            cv.putText(frame, f"Predicted: {final_class_label}", (10, 30), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv.LINE_AA)
-            for i, (label, percentage) in enumerate(zip(class_labels, prediction_percentages)):
-                cv.putText(frame, f"{label}: {percentage:.2f}%", (10, 60 + i * 30), cv.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv.LINE_AA)
+                    # Criar máscara preta e desenhar landmarks
+                    mask_frame = np.zeros((frame.shape[0], frame.shape[1], 3), dtype=np.uint8)
+                    if pose_results.pose_landmarks:
+                        mp_drawing.draw_landmarks(mask_frame, pose_results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
+                    if hand_results.multi_hand_landmarks:
+                        for hand_landmarks in hand_results.multi_hand_landmarks:
+                            mp_drawing.draw_landmarks(mask_frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
 
-            # Mostrar o vídeo real e a máscara
-            cv.imshow('Real Video with Predictions', frame)
-            cv.imshow('MediaPipe Mask', mask_frame)
+                    # Converter máscara para escala de cinza
+                    gray_mask = cv.cvtColor(mask_frame, cv.COLOR_BGR2GRAY)
+                    frames.append(gray_mask)
+
+                    # Mostrar o frame e a máscara
+                    cv.imshow("Real-Time Video", frame)
+                    cv.imshow("Mask", mask_frame)
+
+                    if cv.waitKey(1) & 0xFF == ord('q'):
+                        break
+
+                # Processar os frames capturados
+                prediction = process_video_frames(frames, target_size, num_frames, model)
+                predicted_class = np.argmax(prediction)
+                prediction_percentages = prediction[0] * 100
+
+                # Exibir os resultados no frame
+                ret, frame = cap.read()
+                if ret:
+                    cv.putText(frame, f"Classe: {class_labels[predicted_class]}", (10, 50), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2, cv.LINE_AA)
+                    for i, (label, percentage) in enumerate(zip(class_labels, prediction_percentages)):
+                        cv.putText(frame, f"{label}: {percentage:.2f}%", (10, 80 + i * 30), cv.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv.LINE_AA)
+
+                    # Mostrar o frame com resultados
+                    cv.imshow("Real-Time Video with Prediction", frame)
+                    cv.waitKey(5000)  # Mostrar por 5 segundos
 
             if cv.waitKey(1) & 0xFF == ord('q'):
                 break
 
-    # Liberar a captura de vídeo e fechar as janelas
     cap.release()
     cv.destroyAllWindows()
 
-# Chamar a função para processar o vídeo em tempo real
-process_realtime_video()
+# Executar o programa
+realtime_prediction()
