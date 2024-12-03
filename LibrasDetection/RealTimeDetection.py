@@ -18,7 +18,7 @@ mp_pose = mp.solutions.pose
 mp_drawing = mp.solutions.drawing_utils
 
 # Carregar o modelo treinado
-model_path = r"D:\ProjetoFinal_VisaoComp\model_mask10classes.keras"
+model_path = r"C:\Users\victor\OneDrive\Documentos\GitHub\ProjetoFinal_VisaoComp\model_mask10classes.keras"
 model = load_model(model_path)
 
 # Parâmetros
@@ -47,9 +47,9 @@ def process_video_frames(frames, target_size, num_frames, model):
 
 # Função principal para capturar e processar vídeo em tempo real
 def realtime_prediction():
-    cap = cv.VideoCapture(0)
-    cap.set(cv.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv.CAP_PROP_FRAME_HEIGHT, 480)
+    cap = cv.VideoCapture(1)
+    cap.set(cv.CAP_PROP_FRAME_WIDTH, 640*1.2)
+    cap.set(cv.CAP_PROP_FRAME_HEIGHT, 480*1.2)
 
     frames = []
     with mp_pose.Pose(min_detection_confidence=0.5, min_tracking_confidence=0.5) as pose, \
